@@ -1,193 +1,148 @@
 'use strict';
-
-const NO_CAT = 'Sin categoría';
-
-const SEED_URLS = [
-  'https://apigee.google.com', 'https://cloud.google.com/apigee/docs', 'https://console.aws.amazon.com/',
-  'https://console.aws.amazon.com/vpc/home', 'https://console.aws.amazon.com/ec2/home', 'https://console.aws.amazon.com/route53/v2/home',
-  'https://console.aws.amazon.com/cloudwatch/home', 'https://console.aws.amazon.com/iam/home',
-];
-
-function migrateLinks() {
-  let links = Store.get('links', []);
-  let cats = Store.get('link-categories', []);
-  const aws = Store.get('aws-links', null);
-  let changed = false;
-  if (aws !== null) {
-    aws.forEach(l => {
-      if (SEED_URLS.includes(l.url) || links.some(x => x.url === l.url)) return;
-      const notes = [l.category && l.category !== 'AWS' ? l.category : '', l.notes || ''].filter(Boolean).join(' · ');
-      links.push({ ...l, category: 'AWS', notes });
-    });
-    Store.remove('aws-links');
-    Store.remove('aws-tab');
-    changed = true;
-  }
-  if (!Store.get('seed-cleanup', false)) {
-    links = links.filter(l => !SEED_URLS.includes(l.url));
-    cats = cats.filter(c => !['Apigee', 'AWS'].includes(c) || links.some(l => l.category === c));
-    Store.set('seed-cleanup', true);
-    changed = true;
-  }
-  links.forEach(l => {
-    if (!l.category) { l.category = NO_CAT; changed = true; }
-    if (l.category !== NO_CAT && !cats.includes(l.category)) { cats.push(l.category); changed = true; }
-  });
-  if (changed) { Store.set('links', links); Store.set('link-categories', cats); }
-}
-
 (function () {
   const host = u => { try { return new URL(u).host || u; } catch (e) { return u; } };
 
+  function parseLinks(text) {
+    const json = JSON.parse(text);
+    const list = Array.isArray(json) ? json : json && json.categorias;
+    if (!Array.isArray(list)) throw new Error('Falta la lista "categorias".');
+    return list.map((c, i) => {
+      if (!c || typeof c.nombre !== 'string' || !c.nombre.trim()) throw new Error(`La categoría ${i + 1} no tiene "nombre".`);
+      const links = Array.isArray(c.links) ? c.links : [];
+      return {
+        nombre: c.nombre.trim(),
+        links: links.map((l, j) => {
+          if (!l || !l.url) throw new Error(`Al link ${j + 1} de "${c.nombre}" le falta "url".`);
+          const url = UI.safeUrl(l.url);
+          if (!url) throw new Error(`URL no válida en "${c.nombre}": ${l.url}`);
+          return { nombre: String(l.nombre || host(url)), url };
+        }),
+      };
+    });
+  }
+
+  async function fetchLinks() {
+    const r = await fetch('links.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.text();
+  }
+
   function renderLinks(root) {
-    migrateLinks();
-    let links = Store.get('links', []);
-    let cats = Store.get('link-categories', []);
+    let cats = [];
+    let source = '';
     let sel = Store.get('links-cat', '');
     let q = '';
-    if (sel && sel !== NO_CAT && !cats.includes(sel)) sel = '';
-    const save = () => { Store.set('links', links); Store.set('link-categories', cats); };
-    const allCats = () => cats.concat(links.some(l => l.category === NO_CAT) ? [NO_CAT] : []);
 
     root.innerHTML = `
       <div class="toolbar">
-        <input type="search" class="grow" placeholder="Buscar por nombre, URL o nota…" data-lq>
-        <button class="btn primary" type="button" data-ladd>+ Link</button>
-        <button class="btn" type="button" data-cadd>+ Categoría</button>
+        <input type="search" class="grow" placeholder="Buscar por nombre o URL…" data-lq>
+        <button class="btn" type="button" data-reload>recargar links.json</button>
       </div>
+      <div class="muted small" data-src style="margin:-6px 0 10px"></div>
       <div class="row wrap" data-chips style="margin-bottom:12px"></div>
       <div data-lbody></div>`;
     const body = $('[data-lbody]', root);
     const chips = $('[data-chips]', root);
     const search = $('[data-lq]', root);
+    const srcEl = $('[data-src]', root);
 
     function drawChips() {
-      const count = c => links.filter(l => l.category === c).length;
-      chips.innerHTML = `<button type="button" class="btn small ${!sel ? 'active' : ''}" data-cat="">todas · ${links.length}</button>`
-        + allCats().map(c => `<button type="button" class="btn small ${sel === c ? 'active' : ''}" data-cat="${esc(c)}">${esc(c)} · ${count(c)}</button>`).join('')
-        + (sel && sel !== NO_CAT ? `<span class="sep"></span>
-          <button type="button" class="btn small ghost" data-cact="left" title="Mover a la izquierda">&lt;</button>
-          <button type="button" class="btn small ghost" data-cact="right" title="Mover a la derecha">&gt;</button>
-          <button type="button" class="btn small ghost" data-cact="rename">renombrar</button>
-          <button type="button" class="btn small ghost" data-cact="delete">borrar categoría</button>` : '');
+      const total = cats.reduce((n, c) => n + c.links.length, 0);
+      chips.innerHTML = !cats.length ? '' : `<button type="button" class="btn small ${!sel ? 'active' : ''}" data-cat="">todas · ${total}</button>`
+        + cats.map(c => `<button type="button" class="btn small ${sel === c.nombre ? 'active' : ''}" data-cat="${esc(c.nombre)}">${esc(c.nombre)} · ${c.links.length}</button>`).join('');
     }
 
     function card(l) {
-      return `<div class="link-card" data-id="${l.id}">
-        <a class="link-main" href="${esc(l.url)}" target="_blank" rel="noopener" data-open>
-          <div class="link-title">${esc(l.title)}</div><div class="link-url">${esc(host(l.url))}</div>
+      return `<div class="link-card">
+        <a class="link-main" href="${esc(l.url)}" target="_blank" rel="noopener">
+          <div class="link-title">${esc(l.nombre)}</div><div class="link-url">${esc(host(l.url))}</div>
         </a>
-        ${l.notes ? `<div class="link-notes">${esc(l.notes)}</div>` : ''}
-        <div class="card-actions">
-          <button type="button" data-act="copy" title="Copiar URL">copiar</button>
-          <button type="button" data-act="edit" title="Editar">editar</button>
-          <button type="button" data-act="del" title="Eliminar">borrar</button>
-        </div>
+        <div class="card-actions"><button type="button" data-copy="${esc(l.url)}" title="Copiar URL">copiar</button></div>
       </div>`;
     }
 
     function draw() {
+      if (sel && !cats.some(c => c.nombre === sel)) sel = '';
       drawChips();
-      const f = links.filter(l => (!sel || l.category === sel) && (!q || [l.title, l.url, l.category, l.notes].join(' ').toLowerCase().includes(q)));
-      const order = (a, b) => (b.hits || 0) - (a.hits || 0) || a.title.localeCompare(b.title);
-      if (!f.length) {
-        body.innerHTML = `<div class="empty">${q ? 'Ningún link coincide con la búsqueda.' : sel ? 'Esta categoría está vacía.' : 'Aún no hay links. Crea una categoría con «+ Categoría» y añade tus links con «+ Link».'}</div>`;
+      if (!cats.length) {
+        body.innerHTML = source === 'none'
+          ? `<div class="empty">El navegador no deja leer <b>links.json</b> solo cuando abres la página como archivo.<br><br><button class="btn primary" type="button" data-pick>elegir links.json</button><br><br><span class="small">Está en la misma carpeta que index.html. Se queda guardado hasta que pulses «recargar links.json».</span></div>`
+          : '<div class="empty">links.json no tiene ningún link.</div>';
         return;
       }
-      body.innerHTML = allCats().filter(c => !sel || c === sel).map(c => {
-        const items = f.filter(l => l.category === c).sort(order);
+      const match = l => !q || (l.nombre + ' ' + l.url).toLowerCase().includes(q);
+      const html = cats.filter(c => !sel || c.nombre === sel).map(c => {
+        const items = c.links.filter(match);
         if (!items.length) return '';
-        return `${sel ? '' : `<h3 class="group-title">${esc(c)} <span class="tag">${items.length}</span></h3>`}<div class="link-grid">${items.map(card).join('')}</div>`;
+        return `${sel ? '' : `<h3 class="group-title">${esc(c.nombre)} <span class="tag">${items.length}</span></h3>`}<div class="link-grid">${items.map(card).join('')}</div>`;
       }).join('');
+      body.innerHTML = html || `<div class="empty">${q ? 'Ningún link coincide con la búsqueda.' : 'Esta categoría está vacía.'}</div>`;
     }
 
-    async function askCategory(title, value = '') {
-      const v = await UI.form({ title, values: { name: value }, fields: [{ name: 'name', label: 'Nombre', required: true, full: true, placeholder: 'Ej. Monitorización, Jenkins, Clientes…' }] });
-      if (!v) return null;
-      const name = v.name.trim();
-      if (!name || name === NO_CAT) return null;
-      if (cats.some(c => c.toLowerCase() === name.toLowerCase() && c !== value)) { UI.toast('Ya existe esa categoría', 'warn'); return null; }
-      return name;
+    function useText(text, label) {
+      cats = parseLinks(text);
+      srcEl.textContent = label;
+      draw();
     }
 
-    async function newCategory() {
-      const name = await askCategory('Nueva categoría');
-      if (!name) return null;
-      cats.push(name);
-      save();
-      return name;
+    function showError(e) {
+      cats = [];
+      chips.innerHTML = '';
+      srcEl.textContent = '';
+      body.innerHTML = `<div class="msg err">Error en links.json: ${esc(e.message)}</div>`;
     }
 
-    async function edit(link) {
-      const opts = cats.map(c => [c, c]).concat([[NO_CAT, NO_CAT], ['__new', '+ nueva categoría…']]);
-      const v = await UI.form({
-        title: link ? 'Editar link' : 'Nuevo link',
-        values: link || { category: sel || cats[0] || NO_CAT },
-        fields: [
-          { name: 'title', label: 'Nombre', required: true, placeholder: 'Ej. Apigee UI (prod)' },
-          { name: 'category', label: 'Categoría', type: 'select', options: opts },
-          { name: 'url', label: 'URL', required: true, full: true, placeholder: 'https://…' },
-          { name: 'notes', label: 'Notas', type: 'textarea', rows: 2, full: true, placeholder: 'Opcional' },
-        ],
-      });
-      if (!v) return;
-      v.url = UI.safeUrl(v.url);
-      if (!v.url) { UI.toast('URL no válida', 'error'); return; }
-      if (v.category === '__new') {
-        v.category = await newCategory();
-        if (!v.category) return;
+    function pick() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json,application/json';
+      input.onchange = async () => {
+        const f = input.files && input.files[0];
+        if (!f) return;
+        try {
+          const text = await f.text();
+          parseLinks(text);
+          Store.set('links-json', { name: f.name, loaded: Date.now(), text });
+          source = 'cache';
+          useText(text, `copia de ${f.name} cargada ${UI.fmtDate(Date.now())}. Si cambias el archivo, pulsa «recargar links.json».`);
+          UI.toast('Links cargados');
+        } catch (e) { showError(e); }
+      };
+      input.click();
+    }
+
+    async function load(manual) {
+      try {
+        const text = await fetchLinks();
+        source = 'file';
+        try { useText(text, 'leído de links.json'); } catch (e) { showError(e); }
+        if (manual) UI.toast('links.json recargado');
+        return;
+      } catch (e) { }
+      if (manual) { pick(); return; }
+      const cached = Store.get('links-json', null);
+      if (cached && cached.text) {
+        source = 'cache';
+        try { useText(cached.text, `copia de ${cached.name} cargada ${UI.fmtDate(cached.loaded)}. Si cambias el archivo, pulsa «recargar links.json».`); }
+        catch (e) { showError(e); }
+      } else {
+        source = 'none';
+        draw();
       }
-      if (link) Object.assign(link, v, { updated: Date.now() });
-      else links.push({ id: uid(), hits: 0, created: Date.now(), ...v });
-      save(); draw();
     }
 
-    chips.addEventListener('click', async e => {
+    chips.addEventListener('click', e => {
       const c = e.target.closest('[data-cat]');
-      if (c) { sel = c.dataset.cat; Store.set('links-cat', sel); draw(); return; }
-      const act = e.target.closest('[data-cact]')?.dataset.cact;
-      if (!act) return;
-      const i = cats.indexOf(sel);
-      if (act === 'left' && i > 0) { [cats[i - 1], cats[i]] = [cats[i], cats[i - 1]]; save(); draw(); }
-      if (act === 'right' && i >= 0 && i < cats.length - 1) { [cats[i + 1], cats[i]] = [cats[i], cats[i + 1]]; save(); draw(); }
-      if (act === 'rename') {
-        const name = await askCategory('Renombrar categoría', sel);
-        if (!name || name === sel) return;
-        cats[i] = name;
-        links.forEach(l => { if (l.category === sel) l.category = name; });
-        sel = name; Store.set('links-cat', sel); save(); draw();
-      }
-      if (act === 'delete') {
-        const n = links.filter(l => l.category === sel).length;
-        const msg = n ? `¿Borrar la categoría "${sel}"? Sus ${n} links pasarán a «${NO_CAT}».` : `¿Borrar la categoría "${sel}"?`;
-        if (!await UI.confirm(msg)) return;
-        links.forEach(l => { if (l.category === sel) l.category = NO_CAT; });
-        cats = cats.filter(c => c !== sel);
-        sel = ''; Store.set('links-cat', sel); save(); draw();
-      }
+      if (c) { sel = c.dataset.cat; Store.set('links-cat', sel); draw(); }
     });
-
-    const hit = id => { const l = links.find(x => x.id === id); if (l) { l.hits = (l.hits || 0) + 1; l.lastUsed = Date.now(); Store.set('links', links); } };
-    body.addEventListener('click', async e => {
-      const el = e.target.closest('.link-card'); if (!el) return;
-      const link = links.find(l => l.id === el.dataset.id); if (!link) return;
-      if (e.target.closest('[data-open]')) { hit(link.id); return; }
-      const act = e.target.closest('[data-act]')?.dataset.act;
-      if (act === 'copy') UI.copy(link.url);
-      if (act === 'edit') edit(link);
-      if (act === 'del' && await UI.confirm(`¿Eliminar el link "${link.title}"?`)) { links = links.filter(l => l !== link); save(); draw(); }
-    });
-    body.addEventListener('auxclick', e => {
-      const el = e.target.closest('.link-card');
-      if (el && e.target.closest('[data-open]')) hit(el.dataset.id);
+    body.addEventListener('click', e => {
+      const b = e.target.closest('[data-copy]');
+      if (b) { UI.copy(b.dataset.copy); return; }
+      if (e.target.closest('[data-pick]')) pick();
     });
     search.addEventListener('input', () => { q = search.value.trim().toLowerCase(); draw(); });
-    $('[data-ladd]', root).onclick = () => edit(null);
-    $('[data-cadd]', root).onclick = async () => {
-      const name = await newCategory();
-      if (name) { sel = name; Store.set('links-cat', sel); draw(); }
-    };
-    draw();
+    $('[data-reload]', root).onclick = () => load(true);
+    load(false);
     search.focus();
   }
 

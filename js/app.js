@@ -14,7 +14,7 @@ const debounce = (fn, ms = 250) => {
 };
 
 const Store = {
-  prefix: 'wd:',
+  prefix: 'tl:',
   data: {},
   init() {
     this.data = {};
@@ -37,7 +37,7 @@ const Store = {
   },
   touch() {
     this.modified = Date.now();
-    try { localStorage.setItem('wd-meta:modified', String(this.modified)); } catch (e) { }
+    try { localStorage.setItem('tl-meta:modified', String(this.modified)); } catch (e) { }
     if (typeof DataFile !== 'undefined') DataFile.schedule();
   },
   set(k, v) {
@@ -56,9 +56,9 @@ const Store = {
     Object.keys(this.data).forEach(k => { delete this.data[k]; this.persistLocal(k); });
     Object.entries(obj || {}).forEach(([k, v]) => { this.data[k] = v; this.persistLocal(k); });
     this.modified = modified || Date.now();
-    try { localStorage.setItem('wd-meta:modified', String(this.modified)); } catch (e) { }
+    try { localStorage.setItem('tl-meta:modified', String(this.modified)); } catch (e) { }
   },
-  localModified() { try { return +localStorage.getItem('wd-meta:modified') || 0; } catch (e) { return 0; } },
+  localModified() { try { return +localStorage.getItem('tl-meta:modified') || 0; } catch (e) { return 0; } },
   size() { return JSON.stringify(this.data).length; },
 };
 
@@ -224,8 +224,8 @@ const App = {
   markActive() { $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.id === this.currentId)); },
   refreshNav() { this.renderNav($('#navFilter').value); },
   render() {
-    const id = location.hash.replace(/^#\/?/, '').split('?')[0] || 'tasks';
-    const r = this.find(id) || this.find('tasks');
+    const id = location.hash.replace(/^#\/?/, '').split('?')[0] || 'links';
+    const r = this.find(id) || this.find('links');
     if (this.cleanup) { try { this.cleanup(); } catch (e) { console.error(e); } this.cleanup = null; }
     this.gen++;
     this.currentId = r.id;
@@ -243,7 +243,7 @@ const App = {
       view.innerHTML = `<div class="msg err">Error al cargar la sección: ${esc(e.message)}</div>`;
     }
     this.markActive();
-    document.title = r.title + ' · workdesk';
+    document.title = r.title + ' · tools';
     document.body.classList.remove('nav-open');
     if (typeof DataFile !== 'undefined') DataFile.renderStatus();
   },

@@ -3,7 +3,7 @@
 const HandleDB = {
   open() {
     return new Promise((res, rej) => {
-      const r = indexedDB.open('workdesk', 1);
+      const r = indexedDB.open('tools', 1);
       r.onupgradeneeded = () => r.result.createObjectStore('kv');
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
@@ -31,10 +31,26 @@ const DataFile = {
   timer: null,
   queue: Promise.resolve(),
   supported: typeof window.showSaveFilePicker === 'function' && typeof indexedDB !== 'undefined',
-  pickerOpts: { types: [{ description: 'Datos de workdesk', accept: { 'application/json': ['.json'] } }] },
+  pickerOpts: { types: [{ description: 'Datos de tools', accept: { 'application/json': ['.json'] } }] },
+
+  isBlocked() { try { return localStorage.getItem('tl-df-blocked') === '1'; } catch (e) { return false; } },
+  setBlocked(v) { try { if (v) localStorage.setItem('tl-df-blocked', '1'); else localStorage.removeItem('tl-df-blocked'); } catch (e) { } },
+  lastExport() { try { return +localStorage.getItem('tl-meta:exported') || 0; } catch (e) { return 0; } },
+
+  pickerBlocked(e) {
+    if (!e || (e.name !== 'NotAllowedError' && e.name !== 'SecurityError')) return false;
+    this.setBlocked(true);
+    this.handle = null;
+    try { HandleDB.del('datafile'); } catch (err) { }
+    this.state = 'manual';
+    this.error = '';
+    UI.toast('Este navegador no deja elegir archivos desde la página. Los datos se guardan en el navegador; usa exportar/importar para el .json.', 'warn', 8000);
+    this.renderStatus();
+    return true;
+  },
 
   async init() {
-    if (!this.supported) { this.state = 'unsupported'; this.renderStatus(); return; }
+    if (!this.supported || this.isBlocked()) { this.state = 'manual'; this.renderStatus(); return; }
     try { this.handle = await HandleDB.get('datafile'); } catch (e) { this.handle = null; }
     if (!this.handle) this.state = 'none';
     else {
@@ -45,7 +61,7 @@ const DataFile = {
     }
     this.renderStatus();
     let skip = false;
-    try { skip = sessionStorage.getItem('wd-skip-choose') === '1'; } catch (e) { }
+    try { skip = sessionStorage.getItem('tl-skip-choose') === '1'; } catch (e) { }
     if ((this.state === 'none' || this.state === 'needs-permission') && !skip) this.choose(true);
   },
 
@@ -64,7 +80,7 @@ const DataFile = {
     const text = await f.text();
     if (!text.trim()) return null;
     const json = JSON.parse(text);
-    if (!json || json.app !== 'workdesk' || typeof json.data !== 'object') throw new Error('El archivo no es un JSON de datos de workdesk.');
+    if (!json || json.app !== 'tools' || typeof json.data !== 'object') throw new Error('El archivo no es un JSON de datos de tools.');
     return json;
   },
 
@@ -89,7 +105,9 @@ const DataFile = {
 
   async create() {
     try {
-      const h = await window.showSaveFilePicker({ suggestedName: 'workdesk-datos.json', ...this.pickerOpts });
+      let h;
+      try { h = await window.showSaveFilePicker({ suggestedName: 'tools-datos.json', ...this.pickerOpts }); }
+      catch (e) { if (this.pickerBlocked(e)) return; throw e; }
       this.handle = h;
       await HandleDB.set('datafile', h);
       await this.write();
@@ -102,7 +120,9 @@ const DataFile = {
 
   async open() {
     try {
-      const [h] = await window.showOpenFilePicker({ multiple: false, ...this.pickerOpts });
+      let h;
+      try { [h] = await window.showOpenFilePicker({ multiple: false, ...this.pickerOpts }); }
+      catch (e) { if (this.pickerBlocked(e)) return; throw e; }
       const perm = await h.requestPermission({ mode: 'readwrite' });
       if (perm !== 'granted') { UI.toast('Hace falta permiso de escritura', 'warn'); return; }
       const prev = this.handle;
@@ -126,12 +146,12 @@ const DataFile = {
     await this.flush();
     try { await HandleDB.del('datafile'); } catch (e) { }
     this.handle = null;
-    this.state = this.supported ? 'none' : 'unsupported';
+    this.state = this.supported && !this.isBlocked() ? 'none' : 'manual';
     this.renderStatus();
   },
 
   schedule() {
-    if (this.state !== 'connected') { this.renderStatus(); return; }
+    if (this.state !== 'connected') { clearTimeout(this.timer); this.timer = setTimeout(() => this.renderStatus(), 300); return; }
     clearTimeout(this.timer);
     this.timer = setTimeout(() => this.flush(), 400);
   },
@@ -143,9 +163,41 @@ const DataFile = {
     return this.queue;
   },
 
+  body(saved) { return JSON.stringify({ app: 'tools', version: 1, saved, data: Store.dump() }, null, 1); },
+
+  exportFile() {
+    const saved = Math.max(Date.now(), Store.modified || 0);
+    UI.download('tools-datos.json', this.body(saved));
+    try { localStorage.setItem('tl-meta:exported', String(saved)); } catch (e) { }
+    UI.toast('Descargado tools-datos.json');
+    this.renderStatus();
+  },
+
+  importFile() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = async () => {
+      const f = input.files && input.files[0];
+      if (!f) return;
+      try {
+        const json = JSON.parse(await f.text());
+        if (!json || json.app !== 'tools' || typeof json.data !== 'object') throw new Error('El archivo no es un JSON de datos de tools.');
+        if (Store.keys().length && !(await UI.confirm('Se sustituirán los datos actuales por los de ' + f.name + '. ¿Continuar?', 'Importar', 'primary'))) return;
+        Store.replaceAll(json.data, json.saved);
+        try { localStorage.setItem('tl-meta:exported', String(Store.modified)); } catch (e) { }
+        UI.toast('Datos cargados de ' + f.name);
+        App.refreshNav();
+        App.render();
+      } catch (e) { UI.toast('No se ha podido importar: ' + e.message, 'error', 6000); }
+      this.renderStatus();
+    };
+    input.click();
+  },
+
   async write() {
     const saved = Math.max(Date.now(), Store.modified || 0);
-    const body = JSON.stringify({ app: 'workdesk', version: 1, saved, data: Store.dump() }, null, 1);
+    const body = this.body(saved);
     const w = await this.handle.createWritable();
     await w.write(body);
     await w.close();
@@ -172,8 +224,12 @@ const DataFile = {
     } else if (this.state === 'needs-permission') {
       el.innerHTML = `<button class="btn small primary" type="button" data-reconnect>reconectar ${name}</button> <button class="btn small ghost" type="button" data-df>cambiar</button>`;
       $('[data-reconnect]', el).onclick = () => this.reconnect();
-    } else if (this.state === 'unsupported') {
-      el.innerHTML = '<span class="badge warn">abre con Chrome o Edge para guardar en JSON</span>';
+    } else if (this.state === 'manual') {
+      const pending = (Store.modified || Store.localModified()) > this.lastExport();
+      el.innerHTML = `<div class="small muted" style="margin-bottom:4px">datos en este navegador${pending ? ' · cambios sin exportar' : ''}</div>
+        <div class="row wrap" style="gap:4px"><button class="btn small ${pending ? 'primary' : ''}" type="button" data-exp>exportar .json</button><button class="btn small" type="button" data-imp>importar</button><button class="btn small ghost" type="button" data-df>más</button></div>`;
+      $('[data-exp]', el).onclick = () => this.exportFile();
+      $('[data-imp]', el).onclick = () => this.importFile();
     } else if (this.state === 'missing' || this.state === 'error') {
       el.innerHTML = `<button class="badge err df-btn" type="button" data-df>error con ${name || 'el archivo'}</button>`;
     } else {
@@ -185,17 +241,32 @@ const DataFile = {
 
   choose(startup) {
     if (this.chooser) return;
+    if (this.state === 'manual') {
+      const actions = [];
+      if (this.supported) actions.push({ label: 'Probar de nuevo con archivo', cls: 'ghost', onClick: c => { c(); this.setBlocked(false); this.state = 'none'; this.renderStatus(); this.choose(); } });
+      actions.push({ label: 'Importar .json', onClick: c => { c(); this.importFile(); } });
+      actions.push({ label: 'Exportar .json', cls: 'primary', onClick: c => { c(); this.exportFile(); } });
+      const why = this.supported
+        ? 'Este navegador no permite que la página elija un archivo para escribir en él (suele ser una política de la empresa).'
+        : 'Este navegador no permite que la página escriba en un archivo (solo Chrome y Edge lo hacen).';
+      const last = this.lastExport();
+      this.chooser = UI.modal({
+        title: 'Datos', body: `<p>${why}</p><p>Los datos se guardan solos en este navegador. Para tenerlos en un .json, pulsa «Exportar» y se descarga una copia; con «Importar» la cargas de nuevo.</p><p class="muted small">Última exportación: ${last ? UI.fmtDate(last) : 'nunca'}.</p>`,
+        actions, onClose: () => { this.chooser = null; },
+      });
+      return;
+    }
     const st = this.state;
     const name = this.handle ? esc(this.handle.name) : '';
     const intro = {
-      none: 'Los datos (tareas, links y topologías) se guardan en un archivo JSON que eliges tú. Cada cambio se escribe en él al momento.',
+      none: 'Los datos (topologías y ajustes) se guardan en un archivo JSON que eliges tú. Cada cambio se escribe en él al momento.',
       'needs-permission': `El navegador necesita permiso para seguir usando <b>${name}</b>. En Chrome puedes marcar «permitir siempre» para que no vuelva a preguntar.`,
       connected: `Ahora se guarda en <b>${name}</b> (último guardado ${UI.fmtDate(this.lastSaved)}).`,
       missing: `No se encuentra <b>${name}</b>. ¿Se ha movido o borrado? Ábrelo de nuevo o crea otro.`,
       error: `Error con <b>${name}</b>: ${esc(this.error)}`,
     }[st] || '';
     const actions = [];
-    if (startup) actions.push({ label: 'Ahora no', cls: 'ghost', onClick: c => { try { sessionStorage.setItem('wd-skip-choose', '1'); } catch (e) { } c(); } });
+    if (startup) actions.push({ label: 'Ahora no', cls: 'ghost', onClick: c => { try { sessionStorage.setItem('tl-skip-choose', '1'); } catch (e) { } c(); } });
     if (this.handle && !startup) actions.push({ label: 'Dejar de usar el archivo', cls: 'ghost', onClick: async c => { c(); await this.disconnect(); } });
     actions.push({ label: 'Abrir archivo existente', cls: st === 'none' ? '' : 'ghost', onClick: async c => { c(); await this.open(); } });
     actions.push({ label: 'Crear archivo nuevo', cls: st === 'none' ? 'primary' : '', onClick: async c => { c(); await this.create(); } });

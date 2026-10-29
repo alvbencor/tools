@@ -1,0 +1,17 @@
+{
+  "categorias": [
+    {
+      "nombre": "Ejemplo",
+      "links": [
+        { "nombre": "Lorem ipsum dolor", "url": "https://example.com" },
+        { "nombre": "Sit amet consectetur", "url": "https://example.org/lorem/ipsum" }
+      ]
+    },
+    {
+      "nombre": "Otra categoría",
+      "links": [
+        { "nombre": "Adipiscing elit", "url": "https://example.net" }
+      ]
+    }
+  ]
+}

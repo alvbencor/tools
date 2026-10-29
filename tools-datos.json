@@ -1,0 +1,22 @@
+{
+ "app": "tools",
+ "version": 1,
+ "saved": 1793278886686,
+ "data": {
+  "links-tab": "links",
+  "links-json": {
+   "name": "links.json",
+   "loaded": 1793278841351,
+   "text": "{\n  \"categorias\": [\n    {\n      \"nombre\": \"Ejemplo\",\n      \"links\": [\n        { \"nombre\": \"Lorem ipsum dolor\", \"url\": \"https://example.com\" },\n        { \"nombre\": \"Sit amet consectetur\", \"url\": \"https://example.org/lorem/ipsum\" }\n      ]\n    },\n    {\n      \"nombre\": \"Otra categoría\",\n      \"links\": [\n        { \"nombre\": \"Adipiscing elit\", \"url\": \"https://example.net\" }\n      ]\n    }\n  ]\n}\n"
+  },
+  "base64-tab": "b64",
+  "diff-opts": {
+   "view": "split",
+   "ws": false,
+   "case": false,
+   "json": false,
+   "only": false
+  },
+  "certgen-perfil": 0
+ }
+}
