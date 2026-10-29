@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>workdesk</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="title brand"><h1>workdesk</h1><p>tools</p></div>
+      <input id="navFilter" class="nav-filter" type="search" placeholder="buscar (ctrl+k)" autocomplete="off">
+      <nav id="nav"></nav>
+      <div class="sidebar-foot">
+        <div id="backupStatus" class="small"></div>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <button id="menuBtn" class="btn ghost" type="button">menú</button>
+        <div class="title grow"><h1 id="pageTitle"></h1><p id="pageSub"></p></div>
+        <div id="pageActions" class="row"></div>
+      </header>
+      <section id="view" class="view"></section>
+    </main>
+  </div>
+  <div id="toasts"></div>
+
+  <script src="js/vendor/forge.min.js"></script>
+  <script src="js/vendor/jszip.min.js"></script>
+  <script src="js/lib.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/tasks.js"></script>
+  <script src="js/aws.js"></script>
+  <script src="js/links.js"></script>
+  <script src="js/tools.js"></script>
+  <script src="js/certgen.js"></script>
+  <script src="js/json.js"></script>
+  <script src="js/datafile.js"></script>
+  <script>App.start();</script>
+</body>
+</html>
